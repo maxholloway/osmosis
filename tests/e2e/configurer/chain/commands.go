@@ -39,6 +39,18 @@ func (n *NodeConfig) CreateBalancerPool(poolFile, from string) uint64 {
 	return poolID
 }
 
+// CollectFees collects fees earned by concentrated position in range of [lowerTick; upperTick] in pool with id of poolId
+func (n *NodeConfig) CollectFees(from, lowerTick, upperTick string, poolId uint64) {
+	n.LogActionF("collecting fees from concentrated position")
+	cmd := []string{"osmosisd", "tx", "concentratedliquidity", "collect-fees", lowerTick, upperTick, fmt.Sprintf("--pool-id=%d", poolId), fmt.Sprintf("--from=%s", from)}
+	_, _, err := n.containerManager.ExecTxCmd(n.t, n.chainId, n.Name, cmd)
+	require.NoError(n.t, err)
+
+	n.LogActionF("successfully collected fees for account %s", from)
+}
+
+// CreateConcentratedPool creates a concentrated pool.
+// Returns pool id of newly created pool on success
 func (n *NodeConfig) CreateConcentratedPool(from, denom1, denom2 string, tickSpacing uint64, exponentAtPriceOne int64, swapFee string) uint64 {
 	n.LogActionF("creating concentrated pool")
 
@@ -51,6 +63,8 @@ func (n *NodeConfig) CreateConcentratedPool(from, denom1, denom2 string, tickSpa
 	return poolID
 }
 
+// CreateConcentratedPosition creates a concentrated position from [lowerTick; upperTick] in pool with id of poolId
+// token{0,1} - liquidity to create position with
 func (n *NodeConfig) CreateConcentratedPosition(from, lowerTick, upperTick string, token0, token1 string, token0MinAmt, token1MinAmt int64, frozenUntil int64, poolId uint64) {
 	n.LogActionF("creating concentrated position")
 
@@ -69,6 +83,7 @@ func (n *NodeConfig) StoreWasmCode(wasmFile, from string) {
 	n.LogActionF("successfully stored")
 }
 
+// WithdrawPosition withdraws liquidityOut amount of virtual liquidity from position in range of [lowerTick; upperTick] in pool with id of poolId
 func (n *NodeConfig) WithdrawPosition(from, lowerTick, upperTick string, liquidityOut string, poolId uint64, frozenUntil int64) {
 	n.LogActionF("withdrawing liquidity from position")
 	cmd := []string{"osmosisd", "tx", "concentratedliquidity", "withdraw-position", lowerTick, upperTick, liquidityOut, fmt.Sprintf("%d", frozenUntil), fmt.Sprintf("--from=%s", from), fmt.Sprintf("--pool-id=%d", poolId)}
@@ -157,10 +172,10 @@ func (n *NodeConfig) FailIBCTransfer(from, recipient, amount string) {
 // swapRoutePoolIds is the comma separated list of pool ids to swap through.
 // swapRouteDenoms is the comma separated list of denoms to swap through.
 // To reproduce locally:
-// docker container exec <container id> osmosisd tx gamm swap-exact-amount-in <tokeinInCoin> <tokenOutMinAmountInt> --swap-route-pool-ids <swapRoutePoolIds> --swap-route-denoms <swapRouteDenoms> --chain-id=<id>--from=<address> --keyring-backend=test -b=block --yes --log_format=json
+// docker container exec <container id> osmosisd tx poolmanager swap-exact-amount-in <tokeinInCoin> <tokenOutMinAmountInt> --swap-route-pool-ids <swapRoutePoolIds> --swap-route-denoms <swapRouteDenoms> --chain-id=<id>--from=<address> --keyring-backend=test -b=block --yes --log_format=json
 func (n *NodeConfig) SwapExactAmountIn(tokenInCoin, tokenOutMinAmountInt string, swapRoutePoolIds string, swapRouteDenoms string, from string) {
 	n.LogActionF("swapping %s to get a minimum of %s with pool id routes (%s) and denom routes (%s)", tokenInCoin, tokenOutMinAmountInt, swapRoutePoolIds, swapRouteDenoms)
-	cmd := []string{"osmosisd", "tx", "gamm", "swap-exact-amount-in", tokenInCoin, tokenOutMinAmountInt, fmt.Sprintf("--swap-route-pool-ids=%s", swapRoutePoolIds), fmt.Sprintf("--swap-route-denoms=%s", swapRouteDenoms), fmt.Sprintf("--from=%s", from)}
+	cmd := []string{"osmosisd", "tx", "poolmanager", "swap-exact-amount-in", tokenInCoin, tokenOutMinAmountInt, fmt.Sprintf("--swap-route-pool-ids=%s", swapRoutePoolIds), fmt.Sprintf("--swap-route-denoms=%s", swapRouteDenoms), fmt.Sprintf("--from=%s", from)}
 	_, _, err := n.containerManager.ExecTxCmd(n.t, n.chainId, n.Name, cmd)
 	require.NoError(n.t, err)
 	n.LogActionF("successfully swapped")

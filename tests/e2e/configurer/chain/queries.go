@@ -255,6 +255,7 @@ func (n *NodeConfig) QueryNumPools() uint64 {
 	return numPools.NumPools
 }
 
+// QueryConcentratedPositions returns all concentrated positions that `address` has
 func (n *NodeConfig) QueryConcentratedPositions(address string) []cltypes.FullPositionByOwnerResult {
 	path := fmt.Sprintf("/osmosis/concentratedliquidity/v1beta1/positions/%s", address)
 
@@ -266,6 +267,8 @@ func (n *NodeConfig) QueryConcentratedPositions(address string) []cltypes.FullPo
 	require.NoError(n.t, err)
 	return positionsResponse.Positions
 }
+
+// QueryConcentratedPool returns a concentrated pool with id of poolId
 func (n *NodeConfig) QueryConcentratedPool(poolId uint64) (cltypes.ConcentratedPoolExtension, error) {
 	path := fmt.Sprintf("/osmosis/concentratedliquidity/v1beta1/pools/%d", poolId)
 	bz, err := n.QueryGRPCGateway(path)
