@@ -203,6 +203,8 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 
 		// Defaults
 		defaultFeePerTx = sdk.NewInt(1000)
+		tenDec          = sdk.NewDec(10)
+		nineDec         = sdk.NewDec(9)
 	)
 
 	// Helpers
@@ -277,6 +279,27 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 
 			return feesUncollected
 		}
+
+		// calculateSqrtPriceAtTick sqrtPrice at tickIndex
+		// View x/concentrated-liquidity/README.md -> ConcentratedLiquidity/Architecture/Ticks/Formulas for more details
+		calculateSqrtPriceAtTick = func(tickIndex, exponentAtPriceOne sdk.Int) sdk.Dec {
+			powTenInternal := func(exponent sdk.Int) sdk.Dec {
+				if exponent.GTE(sdk.ZeroInt()) {
+					return tenDec.Power(exponent.Uint64())
+				}
+				return sdk.OneDec().Quo(nineDec.Power(exponent.Abs().Uint64()))
+			}
+
+			geometricExponentIncrementDistanceInTicks := nineDec.Mul(powTenInternal(exponentAtPriceOne.Neg()))
+			geometricExponentDelta := tickIndex.ToDec().QuoIntMut(geometricExponentIncrementDistanceInTicks.TruncateInt()).TruncateInt()
+			exponentAtCurrentTick := exponentAtPriceOne.Add(geometricExponentDelta)
+			currentAdditiveIncrementInTicks := powTenInternal(exponentAtCurrentTick)
+			numAdditiveTicks := tickIndex.ToDec().Sub(geometricExponentDelta.ToDec().Mul(geometricExponentIncrementDistanceInTicks))
+			sqrtPrice, err := powTenInternal(geometricExponentDelta).Add(numAdditiveTicks.Mul(currentAdditiveIncrementInTicks)).ApproxSqrt()
+			s.Require().NoError(err)
+
+			return sqrtPrice
+		}
 	)
 
 	poolID := node.CreateConcentratedPool(initialization.ValidatorWalletName, denom0, denom1, tickSpacing, precisionFactorAtPriceOne, swapFee)
@@ -301,6 +324,7 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 	minTick, maxTick := cl.GetMinAndMaxTicksFromExponentAtPriceOne(sdk.NewInt(precisionFactorAtPriceOne))
 
 	fundTokens := []string{"100000000uosmo", "100000000uion", "100000000stake"}
+
 	// Get 3 addresses to create positions
 	address1 := node.CreateWalletAndFund("addr1", fundTokens)
 	address2 := node.CreateWalletAndFund("addr2", fundTokens)
@@ -308,7 +332,7 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 
 	// Create 2 positions for address1: overlap together, overlap with 2 address3 positions)
 	node.CreateConcentratedPosition(address1, "[-1200]", "400", fmt.Sprintf("10000000%s", denom0), fmt.Sprintf("10000000%s", denom1), 0, 0, frozenUntil, poolID)
-	node.CreateConcentratedPosition(address1, "[-400]", "400", fmt.Sprintf("10000000%s", denom0), fmt.Sprintf("10000000%s", denom1), 0, 0, frozenUntil, poolID)
+	node.CreateConcentratedPosition(address1, "[-400]", "1200", fmt.Sprintf("10000000%s", denom0), fmt.Sprintf("10000000%s", denom1), 0, 0, frozenUntil, poolID)
 
 	// Create 1 position for address2: does not overlap with anything, ends at maximum
 	node.CreateConcentratedPosition(address2, "2200", fmt.Sprintf("%d", maxTick), fmt.Sprintf("10000000%s", denom0), fmt.Sprintf("10000000%s", denom1), 0, 0, frozenUntil, poolID)
@@ -342,7 +366,7 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 	// First position first address
 	validateCLPosition(addr1position1, poolID, -1200, 400)
 	// Second position second address
-	validateCLPosition(addr1position2, poolID, -400, 400)
+	validateCLPosition(addr1position2, poolID, -400, 1200)
 
 	// Assert positions for address2
 	addr2position1 := positionsAddress2[0]
@@ -361,6 +385,7 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 
 	var (
 		globalFeeGrowth = sdk.ZeroDec()
+		outMinAmt       = "1"
 	)
 
 	// Swap 1
@@ -371,9 +396,8 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 	// Asserts that fees are correctly collected for non cross-tick swaps
 	var (
 		// Swap parameters
-		uosmoInDec_Swap1 = sdk.NewDec(3465198) // Minus swap fee = 3430546
+		uosmoInDec_Swap1 = sdk.NewDec(3465198) // Minus swap fee = 3430546.02
 		uosmoIn_Swap1    = fmt.Sprintf("%suosmo", uosmoInDec_Swap1.String())
-		outMinAmt        = "1"
 	)
 
 	// Perform swap (not crossing initialized ticks)
@@ -397,7 +421,7 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 
 	// Assert current square price
 	inAmountSubFee := uosmoInDec_Swap1.Mul(sdk.OneDec().Sub(swapFeeDec))
-	expectedSqrtPriceDelta := inAmountSubFee.Quo(concentratedPool.GetLiquidity())
+	expectedSqrtPriceDelta := inAmountSubFee.QuoTruncate(concentratedPool.GetLiquidity())
 	expectedSqrtPrice := sqrtPriceBeforeSwap.Add(expectedSqrtPriceDelta)
 	s.Require().Equal(expectedSqrtPrice, sqrtPriceAfterSwap)
 
@@ -448,7 +472,8 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 	// Perform swap
 	// PS: address3 still has uncollected rewards from the first swap (11550uosmo)
 	node.SwapExactAmountIn(uosmoIn_Swap2, outMinAmt, fmt.Sprintf("%d", poolID), denom0, initialization.ValidatorWalletName)
-	// let the chain pick up the changes:
+
+	// Let the chain pick up the changes:
 	chainA.WaitForNumHeights(2)
 
 	concentratedPool = updatedPool(poolID)
@@ -466,7 +491,6 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 	// feeGrowthBelow = 0 (lowerTick is minTick, hence, feeGrowthBelow = 0)
 	// feeGrowthAbove = 0 (Fee growth above tick 1400: current tick < upper tick, hence, feeGrowthAbove = 0)
 	// feeGrowthInsideLast = 0 (calculating fee in range since the creation of the pool)
-	// feesUncollectedAddress1Position1_Swap1 is equal to 11533uosmo after these calculations
 	feesUncollectedAddress3Position2_Swap2 := calculateUncollectedFees(
 		uosmoInDec_Swap2,
 		swapFeeDec,
@@ -479,7 +503,7 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 	)
 
 	// Also calculate the amount of fees that were acquired after first swap
-	// TODO: consider merging it with calculating uncollected fees for swap2
+	// TODO: consider merging this with calculating uncollected fees for swap2
 	feesUncollectedAddress3Position2_Swap1 := calculateUncollectedFees(
 		uosmoInDec_Swap1,
 		swapFeeDec,
@@ -498,13 +522,54 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 		addr3BalancesAfter.AmountOf("uosmo"),
 	)
 
-	// assert that position which does not contain tick0 was not affected
+	// Assert that position which does not contain tick0 was not affected
 	addr2BalancesBefore := addrBalance(address2)
 	node.CollectFees(address2, "2200", fmt.Sprintf("%d", maxTick), poolID)
 	addr2BalancesAfter := addrBalance(address2)
 
-	// assert the balances did not change for every token
+	// Assert the balances did not change for every token
 	assertDefaultBalances(addr2BalancesBefore, addr2BalancesAfter, true)
+
+	// Swap 3
+	// Current Tick = 10
+	// Current sqrt price = 1.389707776724801272
+	//
+	// Cross-tick swap:
+	// * Part of swap happens in range of liquidity of 3 positions: both of address1 and one for address3 (until tick 400 - upper tick of address1 position1)
+	// * Another part happens in range of liquidity of 2 positions: one from address1 and address3
+	//
+	// Asserts:
+	// * Net liquidity is kicked out when crossing initialized tick
+	// * Liquidity of position that was kicked out after first swap step does not earn rewards from second swap step
+
+	// Calculate sqrtPrice after the next initialized tick (upperTick of address1 position1 - 400)
+	sqrtPriceAfterNextInitializedTick := calculateSqrtPriceAtTick(sdk.NewInt(403), sdk.NewInt(precisionFactorAtPriceOne))
+
+	var (
+		// Swap parameters
+
+		// uosmoInDec_Swap3 is calculated such that swapping it moves the price over the next initialized tick ( 403 > 400(next tick) )
+		// Formula is as follows:
+		// Δy = L * Δ(sqrtPrice)
+		uosmoInDec_Swap3 = concentratedPool.GetLiquidity().Mul(sqrtPriceAfterNextInitializedTick) // This liquidity moves the price over the next initialized tick
+		uosmoIn_Swap3    = fmt.Sprintf("%suosmo", uosmoInDec_Swap3.String())
+	)
+	node.SwapExactAmountIn(uosmoIn_Swap3, outMinAmt, fmt.Sprintf("%d", poolID), denom0, initialization.ValidatorWalletName)
+
+	// Let the chain pick up the changes:
+	chainA.WaitForNumHeights(2)
+
+	// Calculate the amount of liquidity of the position that was kicked out during swap (address1 position1)
+	liquidityOfKickedOutPosition := positionsAddress1[0].Liquidity
+	// Track pool's liquidity
+	liquidityBeforeSwap = concentratedPool.GetLiquidity()
+
+	concentratedPool = updatedPool(poolID)
+
+	liquidityAfterSwap = concentratedPool.GetLiquidity()
+
+	// Assert that net liquidity of kicked out position was successfully removed from current pool's liquidity
+	s.Require().Equal(liquidityBeforeSwap.Sub(liquidityOfKickedOutPosition), liquidityAfterSwap)
 
 	// Withdraw Position
 	var (
