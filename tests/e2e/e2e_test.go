@@ -235,15 +235,6 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 			}
 		}
 
-		// assertSqrtPriceAfterSwapExactAmountIn = func(tokenInAmt sdk.Int, inAmoactualSqrtPrice sdk.Dec, poolId uint64) {
-		// 	swapFeeInt, ok := sdk.NewIntFromString(swapFee)
-		// 	s.Require().True(ok)
-
-		// 	inAmountSubFee := tokenInAmt.Mul(sdk.OneInt().Sub(swapFeeInt))
-		// 	pool := updatedPool(poolId)
-		// 	expectedSqrtPrice := tokenInAmt.Quo(pool.GetLiquidity().RoundInt())
-		// }
-
 		// calculateFeeGrowthInside calculates fee growth inside range per unit of virtual liquidity
 		// feeGrowthGlobal - global fee growth per unit of virtual liquidity
 		// feeGrowthBelow - fee growth below lower tick
