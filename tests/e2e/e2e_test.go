@@ -444,7 +444,7 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 		uosmoInDec_Swap2 = sdk.NewDec(8361813) // Minus swap fee = 8278195
 		uosmoIn_Swap2    = fmt.Sprintf("%suosmo", uosmoInDec_Swap2.String())
 
-		// amount of uncollected fees for address3 after swap 1
+		// Fee growth inside position2 of address3 after swap1
 		feeGrowthInsideAddress3Position2AfterSwap1 = calculateFeeGrowthInside(globalFeeGrowth, sdk.ZeroDec(), sdk.ZeroDec())
 	)
 	// Perform swap
