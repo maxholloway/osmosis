@@ -324,8 +324,6 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 
 	concentratedPool = updatedPool(poolID)
 
-	concentratedPool = updatedPool(poolID)
-
 	// Assert number of positions per address
 	s.Require().Equal(len(positionsAddress1), 2)
 	s.Require().Equal(len(positionsAddress2), 1)
