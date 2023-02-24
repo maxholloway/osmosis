@@ -238,7 +238,11 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 			}
 		}
 
-		calculateFeeGrowthGlobalFromSwap = func(amountIn, swapFee, poolLiquidity sdk.Dec) sdk.Dec {
+		// calculateFeeGrowthGlobal calculates fee growth global per unit of virtual liquidity based on swap parameters:
+		// amountIn - amount being swapped
+		// swapFee - pool's swap fee
+		// poolLiquidity - current pool liquidity
+		calculateFeeGrowthGlobal = func(amountIn, swapFee, poolLiquidity sdk.Dec) sdk.Dec {
 			// First we get total fee charge for the swap (ΔY * swapFee)
 			feeChargeTotal := amountIn.Mul(swapFee)
 
@@ -246,6 +250,7 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 			feeGrowthGlobal := feeChargeTotal.Quo(poolLiquidity)
 			return feeGrowthGlobal
 		}
+
 		// calculateFeeGrowthInside calculates fee growth inside range per unit of virtual liquidity
 		// feeGrowthGlobal - global fee growth per unit of virtual liquidity
 		// feeGrowthBelow - fee growth below lower tick
@@ -256,18 +261,12 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 		}
 
 		// Helper function for calculating uncollected fees since the time that feeGrowthInsideLast corresponds to
-		// amountIn - amount being swapped
-		// swapFee - pool's swap fee
-		// poolLiquidity - current pool liquidity
 		// positionLiquidity - current position liquidity
 		// feeGrowthBelow - fee growth below lower tick
 		// feeGrowthAbove - fee growth above upper tick
 		// feeGrowthInsideLast - amount of fee growth inside range at the time from which we want to calculate the amount of uncollected fees
 		// globalFeeGrowthTracker - variable for tracking global fee growth
-		calculateUncollectedFees = func(amountIn, swapFee, poolLiquidity, positionLiquidity, feeGrowthBelow, feeGrowthAbove, feeGrowthInsideLast sdk.Dec, globalFeeGrowthTracker *sdk.Dec) sdk.Dec {
-			feeGrowthGlobal := calculateFeeGrowthGlobalFromSwap(amountIn, swapFee, poolLiquidity)
-			globalFeeGrowthTracker.Add(feeGrowthGlobal)
-
+		calculateUncollectedFees = func(positionLiquidity, feeGrowthBelow, feeGrowthAbove, feeGrowthInsideLast sdk.Dec, feeGrowthGlobal sdk.Dec) sdk.Dec {
 			// Calculating fee growth inside range [-1200; 400]
 			feeGrowthInside := calculateFeeGrowthInside(feeGrowthGlobal, feeGrowthBelow, feeGrowthAbove)
 
@@ -385,15 +384,9 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 	var (
 		// globalFeeGrowth is a variable for tracking global fee growth. Increments inside calculateUncollectedFees() when calculating uncollected fees
 		globalFeeGrowth = sdk.ZeroDec()
-
-		// Initialize fee growth insides for postitions that will be affected by swaps
-		FGIaddress1position1 = sdk.ZeroDec()
-		FGIaddress1position2 = sdk.ZeroDec()
-		FGIaddress3position2 = sdk.ZeroDec()
-
-		outMinAmt = "1"
+		outMinAmt       = "1"
 	)
-	fmt.Println(FGIaddress1position1, FGIaddress1position2, FGIaddress3position2)
+
 	// Swap 1
 	// Current Tick = 0
 	// Current Sqrt Price = 1
@@ -409,6 +402,7 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 	// Perform swap (not crossing initialized ticks)
 	// This swap moves current tick to index 3
 	node.SwapExactAmountIn(uosmoIn_Swap1, outMinAmt, fmt.Sprintf("%d", poolID), denom0, initialization.ValidatorWalletName)
+	globalFeeGrowth.AddMut(calculateFeeGrowthGlobal(uosmoInDec_Swap1, swapFeeDec, concentratedPool.GetLiquidity()))
 
 	// Let the chain pick up the changes:
 	chainA.WaitForNumHeights(2)
@@ -444,25 +438,16 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 	// feeGrowthBelow = 0 (Fee growth below tick -1200: current tick >= lower tick, hence, feeGrowthBelow = 0)
 	// feeGrowthAbove = 0 (Fee growth above tick 400: current tick < upper tick, hence, feeGrowthAbove = 0)
 	// feeGrowthInsideLast = 0 (calculating fee in range since the creation of the pool)
-	// feesUncollectedAddress1Position1_Swap1 is equal to 11533uosmo after these calculations
 	feesUncollectedAddress1Position1_Swap1 := calculateUncollectedFees(
-		uosmoInDec_Swap1,
-		swapFeeDec,
-		concentratedPool.GetLiquidity(),
 		positionsAddress1[0].Liquidity,
+		sdk.ZeroDec(), // no growth below
+		sdk.ZeroDec(), // no growth above
 		sdk.ZeroDec(),
-		sdk.ZeroDec(),
-		sdk.ZeroDec(),
-		&globalFeeGrowth,
+		globalFeeGrowth,
 	)
 
-	// bump FGI of affected positions
-	FGIaddress1position1 = calculateFeeGrowthInside(globalFeeGrowth, sdk.ZeroDec(), sdk.ZeroDec())
-	FGIaddress1position2 = calculateFeeGrowthInside(globalFeeGrowth, sdk.ZeroDec(), sdk.ZeroDec())
-	FGIaddress3position2 = calculateFeeGrowthInside(globalFeeGrowth, sdk.ZeroDec(), sdk.ZeroDec())
-
 	s.Require().Equal(
-		addr1BalancesBefore.AmountOf("uosmo").Add(sdk.NewInt(feesUncollectedAddress1Position1_Swap1.TruncateInt64())),
+		addr1BalancesBefore.AmountOf("uosmo").Add(feesUncollectedAddress1Position1_Swap1.TruncateInt()),
 		addr1BalancesAfter.AmountOf("uosmo"),
 	)
 
@@ -476,16 +461,14 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 		// Second swap parameters
 		uosmoInDec_Swap2 = sdk.NewDec(8361813) // Minus swap fee = 8278195
 		uosmoIn_Swap2    = fmt.Sprintf("%suosmo", uosmoInDec_Swap2.String())
+
+		feeGrowthGlobal_Swap1 = globalFeeGrowth.Clone()
 	)
 
 	// Perform swap
 	// PS: address3 still has uncollected rewards from the first swap (11550uosmo)
 	node.SwapExactAmountIn(uosmoIn_Swap2, outMinAmt, fmt.Sprintf("%d", poolID), denom0, initialization.ValidatorWalletName)
-
-	// bump FGI of affected positions
-	FGIaddress1position1 = calculateFeeGrowthInside(globalFeeGrowth, sdk.ZeroDec(), sdk.ZeroDec())
-	FGIaddress1position2 = calculateFeeGrowthInside(globalFeeGrowth, sdk.ZeroDec(), sdk.ZeroDec())
-	FGIaddress3position2 = calculateFeeGrowthInside(globalFeeGrowth, sdk.ZeroDec(), sdk.ZeroDec())
+	globalFeeGrowth.AddMut(calculateFeeGrowthGlobal(uosmoInDec_Swap2, swapFeeDec, concentratedPool.GetLiquidity()))
 
 	// Let the chain pick up the changes:
 	chainA.WaitForNumHeights(2)
@@ -502,36 +485,31 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 
 	// Assert the amount of collected fees:
 
+	// Calculate uncollected fees for both swap1 and swap2 for address3 position2
 	// feeGrowthBelow = 0 (lowerTick is minTick, hence, feeGrowthBelow = 0)
 	// feeGrowthAbove = 0 (Fee growth above tick 1400: current tick < upper tick, hence, feeGrowthAbove = 0)
 	// feeGrowthInsideLast = 0 (calculating fee in range since the creation of the pool)
-	feesUncollectedAddress3Position2_Swap2 := calculateUncollectedFees(
-		uosmoInDec_Swap2.Add(uosmoInDec_Swap1),
-		swapFeeDec,
-		concentratedPool.GetLiquidity(),
+
+	// Uncollected Swap1
+	feesUncollectedAddress3Position2_Swap1 := calculateUncollectedFees(
 		positionsAddress3[1].Liquidity,
 		sdk.ZeroDec(),
 		sdk.ZeroDec(),
 		sdk.ZeroDec(), // since beginning
-		&globalFeeGrowth,
+		feeGrowthGlobal_Swap1,
 	)
-	fmt.Println(feesUncollectedAddress3Position2_Swap2, addr3BalancesBefore.AmountOf("uosmo"))
-	// Also calculate the amount of fees that were acquired after first swap
-	// TODO: consider merging it with calculating uncollected fees for swap2
-	// feesUncollectedAddress3Position2_Swap1 := calculateUncollectedFees(
-	// 	uosmoInDec_Swap1,
-	// 	swapFeeDec,
-	// 	concentratedPool.GetLiquidity(),
-	// 	positionsAddress3[1].Liquidity,
-	// 	sdk.ZeroDec(),
-	// 	sdk.ZeroDec(),
-	// 	sdk.ZeroDec(),
-	// 	&globalFeeGrowth,
-	// )
+
+	// Uncollected Swap1
+	feesUncollectedAddress3Position2_Swap2 := calculateUncollectedFees(
+		positionsAddress3[1].Liquidity,
+		sdk.ZeroDec(),
+		sdk.ZeroDec(),
+		calculateFeeGrowthInside(feeGrowthGlobal_Swap1, sdk.ZeroDec(), sdk.ZeroDec()), // since beginning
+		globalFeeGrowth,
+	)
 
 	s.Require().Equal(
-		addr3BalancesBefore.AmountOf("uosmo").
-			Add(feesUncollectedAddress3Position2_Swap2.TruncateInt()),
+		addr3BalancesBefore.AmountOf("uosmo").Add(feesUncollectedAddress3Position2_Swap1.TruncateInt()).Add(feesUncollectedAddress3Position2_Swap2.TruncateInt()),
 		addr3BalancesAfter.AmountOf("uosmo"),
 	)
 
@@ -556,33 +534,45 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 	// * Liquidity of position that was kicked out after first swap step does not earn rewards from second swap step
 
 	// tickOffset is a tick index after the next initialized tick to which this swap needs to move the price
-	tickOffset := int64(3)
+	tickOffset := sdk.NewInt(3)
+	currentSqrtPrice := concentratedPool.GetCurrentSqrtPrice()
+	currentLiquidity := concentratedPool.GetLiquidity()
+	nextInitTick := sdk.NewInt(400) // address1 position1's upper tick
 
 	// Calculate sqrtPrice after and at the next initialized tick (upperTick of address1 position1 - 400)
-	sqrtPriceAfterNextInitializedTick := calculateSqrtPriceAtTick(sdk.NewInt(400+tickOffset), sdk.NewInt(precisionFactorAtPriceOne))
-	sqrtPriceAtNextInitializedTick := calculateSqrtPriceAtTick(sdk.NewInt(400), sdk.NewInt(precisionFactorAtPriceOne))
+	sqrtPriceAfterNextInitializedTick := calculateSqrtPriceAtTick(nextInitTick.Add(tickOffset), sdk.NewInt(precisionFactorAtPriceOne))
+	sqrtPriceAtNextInitializedTick := calculateSqrtPriceAtTick(nextInitTick, sdk.NewInt(precisionFactorAtPriceOne))
+
+	// Calculate Δ(sqrtPrice)
+	deltaSqrtPriceAfterNextInitializedTick := sqrtPriceAfterNextInitializedTick.Sub(sqrtPriceAtNextInitializedTick)
+	deltsSqrtPriceAtNextInitializedTick := sqrtPriceAtNextInitializedTick.Sub(currentSqrtPrice)
 
 	// Calculate amount of osmo required, such that the current tick after the swap is nextInitTick + tickOffset
 	// Formula is as follows:
 	// Δy = L * Δ(sqrtPrice)
-	amountInToGetToNextInitTick := sqrtPriceAtNextInitializedTick.Mul(concentratedPool.GetLiquidity())
-	amountInToGetToTickAfterInitialized := sqrtPriceAfterNextInitializedTick.Mul(concentratedPool.GetLiquidity().Sub(positionsAddress1[0].Liquidity))
+	amountInToGetToTickAfterInitialized := deltaSqrtPriceAfterNextInitializedTick.Mul(currentLiquidity.Sub(positionsAddress1[0].Liquidity))
+	amountInToGetToNextInitTick := deltsSqrtPriceAtNextInitializedTick.Mul(currentLiquidity)
 
 	var (
 		// Swap parameters
 
 		// uosmoInDec_Swap3_NoFee is calculated such that swapping this amount moves the price over the next initialized tick ( 403 > 400(next tick) ) (not considered swapFee)
 		uosmoInDec_Swap3_NoFee = amountInToGetToNextInitTick.Add(amountInToGetToTickAfterInitialized)
-		uosmoInDec_Swap3       = uosmoInDec_Swap3_NoFee.Quo(sdk.MustNewDecFromStr("0.99")) // account for swap fee of 1%
+		uosmoInDec_Swap3       = uosmoInDec_Swap3_NoFee.Mul(sdk.OneDec().Add(swapFeeDec)) // account for swap fee of 1%
 		uosmoIn_Swap3          = fmt.Sprintf("%suosmo", uosmoInDec_Swap3.String())
 
 		// Defaults
-		uosmoInDec_Swap3_UntilNextInitializedTick_NoFee = amountInToGetToNextInitTick                                                        // amountOne to move price to next initialized tick (not considered swapFee)
-		uosmoInDec_Swap3_UntilNextInitializedTick       = uosmoInDec_Swap3_UntilNextInitializedTick_NoFee.Quo(sdk.MustNewDecFromStr("0.99")) // account for swap fee of 1%
+		// uosmoInDec_Swap3_UntilNextInitializedTick_NoFee = amountInToGetToNextInitTick                                                       // amountOne to move price to next initialized tick (not considered swapFee)
+		// uosmoInDec_Swap3_UntilNextInitializedTick       = uosmoInDec_Swap3_UntilNextInitializedTick_NoFee.Mul(sdk.OneDec().Add(swapFeeDec)) // account for swap fee of 1%
+
+		feeGrowthGlobal_Swap2 = globalFeeGrowth.Clone()
 	)
-	fmt.Println("MOVE TO 400: ", uosmoInDec_Swap3_UntilNextInitializedTick)
+	// Collect fees for address1 position1 to avoid overhead computations (swap2 already asserted fees are aggregated correctly from multiple swaps)
+	node.CollectFees(address1, "[-1200]", "400", poolID)
+
 	// Perform a swap
 	node.SwapExactAmountIn(uosmoIn_Swap3, outMinAmt, fmt.Sprintf("%d", poolID), denom0, initialization.ValidatorWalletName)
+	globalFeeGrowth.AddMut(calculateFeeGrowthGlobal(uosmoInDec_Swap3, swapFeeDec, concentratedPool.GetLiquidity()))
 
 	// Let the chain pick up the changes:
 	chainA.WaitForNumHeights(2)
@@ -606,15 +596,23 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 	addr1BalancesAfter = addrBalance(address1)
 
 	// Assert that address1 position1 earned fees only from first swap step
-	// feesUncollectedAddress1Position1_Swap3_Step1 := calculateUncollectedFees(
-	// 	uosmoInDec_Swap3_UntilNextInitializedTick,
-	// 	swapFeeDec,
-	// 	liquidityBeforeSwap,
-	// 	positionsAddress1[0].Liquidity,
-	// 	sdk.ZeroDec(),
-	// 	sdk.ZeroDec(),
-	// 	calculateFeeGrowthInside(globalFeeGrowth, sdk.ZeroDec(), sdk.ZeroDec()),
-	// )
+	feeCharge_Swap3_Step1 := amountInToGetToNextInitTick.Mul(swapFeeDec).Quo(sdk.OneDec().Sub(swapFeeDec))
+	feeCharge_Swap3_Step1.QuoMut(currentLiquidity) // feeCharge_Swap3_Step1 per unit of virtual liquidity
+
+	// Calculate uncollected fees for position, which liquidity will only be live part of the swap
+	feesUncollectedAddress1Position1_Swap3 := calculateUncollectedFees(
+		positionsAddress1[0].Liquidity,
+		sdk.ZeroDec(),
+		sdk.ZeroDec(),
+		calculateFeeGrowthInside(feeGrowthGlobal_Swap2, sdk.ZeroDec(), sdk.ZeroDec()),
+		feeGrowthGlobal_Swap2.Add(feeCharge_Swap3_Step1), // cannot use globalFeeGrowth, it was already increased by second swap's step
+	)
+
+	s.Require().Equal(
+		addr1BalancesBefore.AmountOf("uosmo").Add(feesUncollectedAddress1Position1_Swap3.TruncateInt()),
+		addr1BalancesAfter.AmountOf("uosmo"),
+	)
+
 	// Withdraw Position
 	var (
 		// withdraw position parameters
