@@ -207,9 +207,6 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 		nineDec         = sdk.NewDec(9)
 	)
 
-	// type (
-	// 	feeGrowthInside sdk.Dec
-	// )
 	// Helpers
 	var (
 		// Get current (updated) pool
@@ -533,7 +530,7 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 	// * Net liquidity is kicked out when crossing initialized tick
 	// * Liquidity of position that was kicked out after first swap step does not earn rewards from second swap step
 
-	// tickOffset is a tick index after the next initialized tick to which this swap needs to move the price
+	// tickOffset is a tick index after the next initialized tick to which this swap needs to move the current price
 	tickOffset := sdk.NewInt(3)
 	currentSqrtPrice := concentratedPool.GetCurrentSqrtPrice()
 	currentLiquidity := concentratedPool.GetLiquidity()
@@ -545,13 +542,13 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 
 	// Calculate Δ(sqrtPrice)
 	deltaSqrtPriceAfterNextInitializedTick := sqrtPriceAfterNextInitializedTick.Sub(sqrtPriceAtNextInitializedTick)
-	deltsSqrtPriceAtNextInitializedTick := sqrtPriceAtNextInitializedTick.Sub(currentSqrtPrice)
+	deltaSqrtPriceAtNextInitializedTick := sqrtPriceAtNextInitializedTick.Sub(currentSqrtPrice)
 
 	// Calculate amount of osmo required, such that the current tick after the swap is nextInitTick + tickOffset
 	// Formula is as follows:
 	// Δy = L * Δ(sqrtPrice)
 	amountInToGetToTickAfterInitialized := deltaSqrtPriceAfterNextInitializedTick.Mul(currentLiquidity.Sub(positionsAddress1[0].Liquidity))
-	amountInToGetToNextInitTick := deltsSqrtPriceAtNextInitializedTick.Mul(currentLiquidity)
+	amountInToGetToNextInitTick := deltaSqrtPriceAtNextInitializedTick.Mul(currentLiquidity)
 
 	var (
 		// Swap parameters
@@ -610,6 +607,100 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 
 	s.Require().Equal(
 		addr1BalancesBefore.AmountOf("uosmo").Add(feesUncollectedAddress1Position1_Swap3.TruncateInt()),
+		addr1BalancesAfter.AmountOf("uosmo"),
+	)
+
+	// Track balance off address3 position2: check that position that has not been kicked out earned full rewards
+	addr3BalancesBefore = addrBalance(address3)
+	node.CollectFees(address3, fmt.Sprintf("[%d]", minTick), "1400", poolID)
+	addr3BalancesAfter = addrBalance(address3)
+
+	// Calculate uncollected fees for address3 position2 (was active throughout the whole swap)
+	feesUncollectedAddress3Position2_Swap3 := calculateUncollectedFees(
+		positionsAddress3[1].Liquidity,
+		sdk.ZeroDec(),
+		sdk.ZeroDec(),
+		sdk.ZeroDec(), // have never crossed this position's ticks
+		globalFeeGrowth,
+	)
+
+	s.Require().Equal(
+		addr3BalancesBefore.AmountOf("uosmo").Add(feesUncollectedAddress3Position2_Swap3.TruncateInt()),
+		addr3BalancesAfter.AmountOf("uosmo"),
+	)
+
+	// Swap 4
+	// Asserts:
+	// * swapping amountZero for amountOne works correctly
+	// * liquidity of positions that come in range are correctly kicked in
+
+	// tickOffset is a tick index after the next initialized tick to which this swap needs to move the current price
+	tickOffset = sdk.NewInt(3)
+	currentSqrtPrice = concentratedPool.GetCurrentSqrtPrice()
+	currentLiquidity = concentratedPool.GetLiquidity()
+	nextInitTick = sdk.NewInt(400)
+
+	// Calculate sqrtPrice after and at the next initialized tick (upperTick of address1 position1 - 400)
+	sqrtPricebBelowNextInitializedTick := calculateSqrtPriceAtTick(nextInitTick.Sub(tickOffset), sdk.NewInt(precisionFactorAtPriceOne))
+	sqrtPriceAtNextInitializedTick = calculateSqrtPriceAtTick(nextInitTick, sdk.NewInt(precisionFactorAtPriceOne))
+
+	// Calculate reciprocals of sqrt prices
+	sqrtPricebBelowNextInitializedTickReciprocal := sdk.OneDec().Quo(sqrtPricebBelowNextInitializedTick)
+	sqrtPriceAtNextInitializedTickReciprocal := sdk.OneDec().Quo(sqrtPriceAtNextInitializedTick)
+
+	// Calculate Δ(sqrtPrice): absolutes
+	deltaSqrtPriceBelowNextInitializedTickReciprocal := sqrtPricebBelowNextInitializedTickReciprocal.Sub(sqrtPriceAtNextInitializedTickReciprocal).Abs()
+	deltaSqrtPriceAtNextInitializedTickReciprocal := sqrtPriceAtNextInitializedTickReciprocal.Sub(currentSqrtPrice).Abs()
+
+	// Calculate amount of osmo required, such that the current tick after the swap is nextInitTick + tickOffset
+	// Formula is as follows:
+	// Δx = L * Δ(1/sqrtPrice)
+	amountInToGetToTickAfterInitialized = deltaSqrtPriceBelowNextInitializedTickReciprocal.Mul(currentLiquidity.Sub(positionsAddress1[0].Liquidity))
+	amountInToGetToNextInitTick = deltaSqrtPriceAtNextInitializedTickReciprocal.Mul(currentLiquidity)
+	var (
+		// Swap parameters
+		uionInDec_Swap4 = amountInToGetToNextInitTick.Add(amountInToGetToTickAfterInitialized)
+		uionIn_Swap4    = fmt.Sprintf("%suion", uionInDec_Swap4.String())
+
+		// feeGrowthGlobal_Swap3 = globalFeeGrowth.Clone()
+	)
+	// Collect fees for address1 position1 and address3 position3 to avoid overhead computations (swap2 already asserted fees are aggregated correctly from multiple swaps)
+	node.CollectFees(address1, "[-400]", "1200", poolID)
+	node.CollectFees(address3, fmt.Sprintf("[%d]", minTick), "1400", poolID)
+
+	// Perform swap (not crossing initialized ticks)
+	// This swap moves current tick to index 3
+	node.SwapExactAmountIn(uionIn_Swap4, outMinAmt, fmt.Sprintf("%d", poolID), denom1, initialization.ValidatorWalletName)
+	globalFeeGrowth.AddMut(calculateFeeGrowthGlobal(uionInDec_Swap4, swapFeeDec, concentratedPool.GetLiquidity()))
+
+	// Let the chain pick up the changes:
+	chainA.WaitForNumHeights(2)
+
+	concentratedPool = updatedPool(poolID)
+
+	// Track balance of address3 position2
+	addr3BalancesBefore = addrBalance(address3)
+	node.CollectFees(address3, fmt.Sprintf("[%d]", minTick), "1400", poolID)
+	addr3BalancesAfter = addrBalance(address3)
+
+	// Assert that the balance changed and only for tokenIn
+	assertDefaultBalances(addr1BalancesBefore, addr1BalancesAfter, false)
+
+	// Assert the amount of collected fees:
+
+	// feeGrowthBelow = 0 (Fee growth below tick -1200: current tick >= lower tick, hence, feeGrowthBelow = 0)
+	// feeGrowthAbove = 0 (Fee growth above tick 400: current tick < upper tick, hence, feeGrowthAbove = 0)
+	// feeGrowthInsideLast = 0 (calculating fee in range since the creation of the pool)
+	feesUncollectedAddress1Position1_Swap1 = calculateUncollectedFees(
+		positionsAddress1[0].Liquidity,
+		sdk.ZeroDec(), // no growth below
+		sdk.ZeroDec(), // no growth above
+		sdk.ZeroDec(),
+		globalFeeGrowth,
+	)
+
+	s.Require().Equal(
+		addr1BalancesBefore.AmountOf("uosmo").Add(feesUncollectedAddress1Position1_Swap1.TruncateInt()),
 		addr1BalancesAfter.AmountOf("uosmo"),
 	)
 
