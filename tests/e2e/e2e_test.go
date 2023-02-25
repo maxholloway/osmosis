@@ -535,10 +535,9 @@ func (s *IntegrationTestSuite) TestAAAConcentratedLiquidity() {
 	amountRemainingAfterStep1 := uosmoInDec_Swap2.Sub(amountInToGetToNextInitTick).Sub(feeCharge_Swap2_Step1) // 132857707.46598141293134257720202020202020202020202
 	feeCharge_Swap2_Step2 := amountRemainingAfterStep1.Sub(amountInToGetToTickAfterInitialized)
 
-	feeCharge_Swap2_Step1.QuoMut(currentLiquidity)   // per unit of virtual liquidity
-	feeCharge_Swap2_Step2.QuoMut(liquidityAfterSwap) // per unit of virtual liquidity
-	fmt.Println("total fee charge", feeCharge_Swap2_Step2.Add(feeCharge_Swap2_Step1))
-	// 67421966.7404
+	feeCharge_Swap2_Step1.QuoMut(currentLiquidity)                                    // per unit of virtual liquidity
+	feeCharge_Swap2_Step2.QuoMut(liquidityAfterSwap)                                  // per unit of virtual liquidity
+	fmt.Println("total fee charge", feeCharge_Swap2_Step2.Add(feeCharge_Swap2_Step1)) // 67421966.7404
 
 	globalFeeGrowth.AddMut(feeCharge_Swap2_Step1.Add(feeCharge_Swap2_Step1))
 
