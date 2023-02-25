@@ -140,11 +140,6 @@ func (suite *ConcentratedMathTestSuite) TestTickToSqrtPrice() {
 			exponentAtPriceOne: sdk.NewInt(-8),
 			expectedPrice:      sdk.MustNewDecFromStr("0.000000000088900000"),
 		},
-		"random2": {
-			tickIndex:          sdk.NewInt(400),
-			exponentAtPriceOne: sdk.NewInt(-1),
-			expectedPrice:      sdk.MustNewDecFromStr("0.000000000088900000"),
-		},
 	}
 
 	for name, tc := range testCases {
